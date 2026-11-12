@@ -167,3 +167,23 @@ export function bindVoice(node, m, onEnded) {
 }
 
 export function stopVoice() { current?.stop(); }
+
+/** Длительность и волна для готового аудиофайла (фолбэк, когда микрофон недоступен). */
+export async function analyzeAudio(blob) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  try {
+    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const data = buf.getChannelData(0);
+    const n = 40, step = Math.floor(data.length / n) || 1, out = [];
+    for (let i = 0; i < n; i++) {
+      let m = 0;
+      for (let j = i * step; j < Math.min(data.length, (i + 1) * step); j += 16) m = Math.max(m, Math.abs(data[j]));
+      out.push(m);
+    }
+    const max = Math.max(...out, 0.01);
+    return { duration: buf.duration, waveform: out.map((v) => +Math.max(0.08, v / max).toFixed(2)) };
+  } catch {
+    return { duration: 0, waveform: Array(40).fill(0.4) };
+  } finally { ctx.close?.().catch(() => {}); }
+}

@@ -1,6 +1,7 @@
 // Просмотр историй
 import { api } from './api.js';
 import { I, verifiedBadge } from './icons.js';
+import { go } from './nav.js';
 import { esc, el, avatar, ago, toast } from './util.js';
 
 const DURATION = 5000;
@@ -73,7 +74,7 @@ export function openStories(groups, startGroup, { me, onClose, onReply } = {}) {
       $('[data-send]').addEventListener('click', send);
     }
     $('[data-close]').addEventListener('click', close);
-    $('[data-user]').addEventListener('click', () => { close(); location.hash = '#/u/' + g.user.username; });
+    $('[data-user]').addEventListener('click', () => { close(); go('#/u/' + g.user.username); });
     $('[data-del]')?.addEventListener('click', async () => {
       await api('/stories/' + s.id, { method: 'DELETE' });
       g.items.splice(ii, 1);

@@ -97,12 +97,13 @@ export function isEmojiOnly(text) {
   return /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|‍|️|\s)+$/u.test(t) && !/^[\d#*\s]+$/.test(t);
 }
 
-export function pickFile(accept, multiple = false) {
+export function pickFile(accept, multiple = false, capture = false) {
   return new Promise((resolve) => {
     const inp = document.createElement('input');
     inp.type = 'file';
     inp.accept = accept;
     inp.multiple = multiple;
+    if (capture) inp.setAttribute('capture', '');
     inp.onchange = () => resolve([...inp.files]);
     inp.click();
   });

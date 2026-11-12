@@ -4,8 +4,11 @@ import {
   $, $$, esc, el, linkify, avatar, nameHtml, hhmm, dayLabel, listTime, ago, lastSeen, toast,
   isEmojiOnly, pickFile, longPress, plural,
 } from './util.js';
-import { canRecord, startRecording, voiceHtml, bindVoice, stopVoice } from './voice.js';
+import { canRecord as canRecordLive, startRecording, voiceHtml, bindVoice, stopVoice, analyzeAudio } from './voice.js';
+const DEMO = !!window.DELETE_DEMO;
+const canRecord = () => DEMO || canRecordLive();
 import { openStories } from './stories.js';
+import { go, here, back, replace, onRoute } from './nav.js';
 
 const app = $('#app');
 const state = {
@@ -33,17 +36,17 @@ async function boot() {
   connect();
   refreshChats();
   loadStories();
-  if (!location.hash || location.hash === '#/' || location.hash === '#') location.replace('#/chats');
+  if (!here() || here() === '#/' || here() === '#') replace('#/chats');
   route();
 }
-window.addEventListener('hashchange', () => state.me && route());
+onRoute(() => state.me && route());
 
 function route() {
   state.cleanup?.();
   state.cleanup = null;
   state.chat = null;
   stopVoice();
-  const [, name, arg] = (location.hash || '#/chats').split('/');
+  const [, name, arg] = here().split('/');
   switch (name) {
     case 'feed': return renderFeed();
     case 'me': return renderProfile(state.me.username, true);
@@ -55,11 +58,6 @@ function route() {
   }
 }
 
-function back(fallback = '#/chats') {
-  if (history.length > 1 && document.referrer !== undefined && state.cameFromApp) history.back();
-  else location.hash = fallback;
-}
-window.addEventListener('hashchange', () => (state.cameFromApp = true));
 
 /* ================================================================ realtime */
 onEvent((ev) => {
@@ -177,8 +175,8 @@ function tabbar(active) {
   node.querySelectorAll('.tab').forEach((b, i) => b.addEventListener('click', () => {
     node.querySelector('.tab-indicator').style.transform = `translateX(${i * 100}%)`;
     const target = '#/' + b.dataset.tab;
-    if (location.hash === target) { $('.scroll', app)?.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-    setTimeout(() => (location.hash = target), 120);
+    if (here() === target) { $('.scroll', app)?.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    setTimeout(() => go(target), 120);
   }));
   node.querySelector('.plus-btn').addEventListener('click', openCreateSheet);
   return node;
@@ -373,7 +371,7 @@ async function renderChat(peerId) {
   let editing = null;
 
   $('[data-back]', screen).addEventListener('click', () => back('#/chats'));
-  $('[data-peer]', screen).addEventListener('click', () => { if (!isFav && peer) location.hash = '#/u/' + peer.username; });
+  $('[data-peer]', screen).addEventListener('click', () => { if (!isFav && peer) go('#/u/' + peer.username); });
 
   const chat = {
     peerId,
@@ -629,7 +627,7 @@ async function renderChat(peerId) {
   let rec = null, recStarting = null, recUi = null, locked = false, startX = 0, startY = 0, downAt = 0, levelsDom = null, timeDom = null;
 
   sendBtn.addEventListener('pointerdown', async (e) => {
-    if (ta.value.trim() || !canRecord()) return;
+    if (ta.value.trim() || !canRecord() || DEMO) return;
     if (rec && locked) return; // в закреплённом режиме обработаем в click
     e.preventDefault();
     sendBtn.setPointerCapture(e.pointerId);
@@ -667,9 +665,25 @@ async function renderChat(peerId) {
   });
   sendBtn.addEventListener('pointercancel', () => { if (recUi && !locked) finishRecording(false); });
   sendBtn.addEventListener('click', () => {
+    if (DEMO && !ta.value.trim()) return sendAudioFile();
     if (rec && locked) return finishRecording(true);
     if (ta.value.trim() || !canRecord()) sendText();
   });
+
+  // демо внутри артефакта: живой микрофон недоступен — записываем/выбираем аудиофайл
+  async function sendAudioFile() {
+    const [file] = await pickFile('audio/*', false, true);
+    if (!file) return;
+    toast('Отправляем голосовое…', 8000);
+    try {
+      const { duration, waveform } = await analyzeAudio(file);
+      const up = await upload(file, file.type || 'audio/mp4');
+      const m = await api('/messages', { method: 'POST', body: { to: peerId, type: 'voice', media: up.url, duration, waveform, replyTo: replyTo?.id } });
+      clearBar();
+      chat.append(m, true);
+      toast('Голосовое отправлено', 900);
+    } catch (e) { toast(e.message); }
+  }
 
   function fmtRec(t) { const s = Math.floor(t); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')},${Math.floor((t % 1) * 10)}`; }
   function showRecorder() {
@@ -774,9 +788,9 @@ function bindPost(node, p, { onDelete } = {}) {
   node.querySelector('[data-more]').addEventListener('click', () => {
     const mine = p.user.id === state.me.id;
     const items = [];
-    if (!mine) items.push({ label: 'Написать ' + p.user.name, icon: I.send, action: () => (location.hash = '#/chat/' + p.user.id) });
+    if (!mine) items.push({ label: 'Написать ' + p.user.name, icon: I.send, action: () => (go('#/chat/' + p.user.id)) });
     if (p.text) items.push({ label: 'Копировать текст', icon: I.copy, action: () => { navigator.clipboard?.writeText(p.text); toast('Скопировано'); } });
-    items.push({ label: 'Профиль', icon: I.user2, action: () => (location.hash = '#/u/' + p.user.username) });
+    items.push({ label: 'Профиль', icon: I.user2, action: () => (go('#/u/' + p.user.username)) });
     if (mine) items.push({ label: 'Удалить публикацию', icon: I.trash, danger: true, action: async () => { await api('/posts/' + p.id, { method: 'DELETE' }); node.remove(); onDelete?.(); toast('Публикация удалена'); } });
     menuSheet(items);
   });
@@ -911,18 +925,18 @@ async function renderProfile(username, own = false) {
 
   $('[data-edit]', screen)?.addEventListener('click', openEditProfile);
   $('[data-more]', screen).addEventListener('click', () => {
-    const link = `${location.origin}/#/u/${u.username}`;
+    const link = window.DELETE_DEMO ? '@' + u.username : `${location.origin}/#/u/${u.username}`;
     const items = own
       ? [
-          { label: 'Избранное', icon: I.bookmark, action: () => (location.hash = '#/favorites') },
-          { label: 'Сохранённые публикации', icon: I.bookmarkFill, action: () => { state.feedMode = 'saved'; location.hash = '#/feed'; } },
+          { label: 'Избранное', icon: I.bookmark, action: () => (go('#/favorites')) },
+          { label: 'Сохранённые публикации', icon: I.bookmarkFill, action: () => { state.feedMode = 'saved'; go('#/feed'); } },
           { label: 'Редактировать профиль', icon: I.edit, action: openEditProfile },
           { label: 'Поделиться профилем', icon: I.copy, action: () => { navigator.clipboard?.writeText(link); toast('Ссылка скопирована'); } },
           { label: 'Включить уведомления', icon: I.chats, action: () => Notification?.requestPermission?.().then((p) => toast(p === 'granted' ? 'Уведомления включены' : 'Уведомления запрещены')) },
           { label: 'Выйти', icon: I.logout, danger: true, action: logout },
         ]
       : [
-          { label: 'Написать', icon: I.send, action: () => (location.hash = '#/chat/' + u.id) },
+          { label: 'Написать', icon: I.send, action: () => (go('#/chat/' + u.id)) },
           { label: 'Скопировать ссылку', icon: I.copy, action: () => { navigator.clipboard?.writeText(link); toast('Ссылка скопирована'); } },
         ];
     menuSheet(items);
@@ -934,7 +948,7 @@ async function logout() {
   disconnect();
   session.set(null);
   state.me = null;
-  location.hash = '';
+  replace('');
   renderOnboarding();
 }
 
@@ -1023,7 +1037,7 @@ function openPostSheet() {
       close();
       toast('Опубликовано');
       if (state.screen === 'feed' || state.screen === 'me') route();
-      else location.hash = '#/feed';
+      else go('#/feed');
     } catch (e) { sheet.querySelector('.err').textContent = e.message; pub.disabled = false; pub.textContent = 'Опубликовать'; }
   });
 }
@@ -1159,7 +1173,7 @@ async function doAuth(mode, body) {
   session.set(r.token);
   state.me = r.user;
   $('#sheet-root').innerHTML = '';
-  location.hash = '#/chats';
+  go('#/chats');
   boot();
 }
 
